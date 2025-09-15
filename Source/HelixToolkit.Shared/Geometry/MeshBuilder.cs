@@ -1014,20 +1014,39 @@ namespace HelixToolkit.Wpf
         {
             var pc = new PointCollection();
             var tc = new List<double>();
+
+            double textureHeight = 0.0;
+            // improve interpolation by adding triangles at midspan
+            bool addMidpoint = baseRadius > height;
             if (baseCap)
             {
                 pc.Add(new Point(0, 0));
                 tc.Add(0);
+                textureHeight += baseRadius;
+                if (addMidpoint)
+                {
+                    pc.Add(new Point(0, baseRadius / 2.0));
+                    tc.Add(textureHeight / 2.0);
+                }
             }
 
             pc.Add(new Point(0, (DoubleOrSingle)baseRadius));
-            tc.Add(1);
+            tc.Add(textureHeight);
+
             pc.Add(new Point((DoubleOrSingle)height, (DoubleOrSingle)topRadius));
-            tc.Add(0);
+            textureHeight += Math.Sqrt(height * height + Math.Pow(baseRadius - topRadius,2));
+            tc.Add(textureHeight);
+            
             if (topCap)
             {
+                if (addMidpoint)
+                {
+                    pc.Add(new Point((DoubleOrSingle)height, topRadius / 2.0));
+                    tc.Add(textureHeight + topRadius / 2.0);
+                }
                 pc.Add(new Point((DoubleOrSingle)height, 0));
-                tc.Add(1);
+                textureHeight += height;
+                tc.Add(textureHeight);
             }
 
             this.AddRevolvedGeometry(pc, tc, origin, direction, thetaDiv);
@@ -2004,14 +2023,25 @@ namespace HelixToolkit.Wpf
                     new Point(height, (DoubleOrSingle)diameter / 2),
                     new Point(height, (DoubleOrSingle)innerDiameter / 2)
                 };
+            var thickness = (diameter - innerDiameter) / 2.0;
+            var tc = new List<double> { 0, thickness, height + thickness, height + 2*thickness };
 
-            var tc = new List<double> { 1, 0, 1, 0 };
+            if (thickness > height)
+            {
+                // improve interpolation by adding triangles at midspan
+                // add top
+                pc.Insert(3, new Point(height, innerDiameter/2 + thickness / 2));
+                tc.Insert(3, height + 1.5 * thickness);
+                // add on bottom
+                pc.Insert(1, new Point(0, innerDiameter/2 + thickness / 2));
+                tc.Insert(1, thickness / 2.0);
+            }
 
             if (innerDiameter > 0)
             {
                 // Add the inner surface
                 pc.Add(new Point(0, (DoubleOrSingle)innerDiameter / 2));
-                tc.Add(1);
+                tc.Add(2 * (height + thickness));
             }
 
             this.AddRevolvedGeometry(pc, tc, point1, dir, thetaDiv);
@@ -2872,18 +2902,24 @@ namespace HelixToolkit.Wpf
             u.Normalize();
             v.Normalize();
 
-            var circle = GetCircle(thetaDiv);
+            var circle = GetCircle(thetaDiv, true);
+            Debug.Assert(circle.Count == thetaDiv + 1);
+            // the distance (in radians) that we travel at each step along the circle
+            var dTheta = 2 * Math.PI / thetaDiv;
 
             var index0 = this.positions.Count;
             var n = points.Count;
 
-            var totalNodes = (points.Count - 1) * 2 * thetaDiv;
+            var totalNodes = (points.Count - 1) * 2 * circle.Count;
             var rowNodes = (points.Count - 1) * 2;
 
-            for (var i = 0; i < thetaDiv; i++)
+            DoubleOrSingle avgRadius = points.Average(pt => pt.Y);
+
+            for (var i = 0; i < circle.Count; i++)
             {
                 var w = (v * circle[i].X) + (u * circle[i].Y);
-
+                var distRad = (DoubleOrSingle)(i * dTheta);
+                var circumferenceTraveled = avgRadius * distRad;
                 for (var j = 0; j + 1 < n; j++)
                 {
                     // Add segment
@@ -2897,10 +2933,10 @@ namespace HelixToolkit.Wpf
                     this.positions.Add(q1);
                     this.positions.Add(q2);
 
+                    var tx = points[j + 1].X - points[j].X;
+                    var ty = points[j + 1].Y - points[j].Y;
                     if (this.normals != null)
                     {
-                        var tx = points[j + 1].X - points[j].X;
-                        var ty = points[j + 1].Y - points[j].Y;
                         var normal = (-direction * ty) + (w * tx);
                         normal.Normalize();
                         this.normals.Add(normal);
@@ -2909,8 +2945,10 @@ namespace HelixToolkit.Wpf
 
                     if (this.textureCoordinates != null)
                     {
-                        this.textureCoordinates.Add(new Point((DoubleOrSingle)i / (thetaDiv - 1), textureValues == null ? (DoubleOrSingle)j / (n - 1) : (DoubleOrSingle)textureValues[j]));
-                        this.textureCoordinates.Add(new Point((DoubleOrSingle)i / (thetaDiv - 1), textureValues == null ? (DoubleOrSingle)(j + 1) / (n - 1) : (DoubleOrSingle)textureValues[j + 1]));
+                        var segmentLength = Math.Sqrt(tx * tx + ty * ty);
+                        var segmentTop = tx < 0 ? 0 : segmentLength;
+                        this.textureCoordinates.Add(new Point(circumferenceTraveled, textureValues == null ? segmentTop : (DoubleOrSingle)textureValues[j]));
+                        this.textureCoordinates.Add(new Point(circumferenceTraveled, textureValues == null ? segmentLength - segmentTop : (DoubleOrSingle)textureValues[j + 1]));
                     }
 
                     var i0 = index0 + (i * rowNodes) + (j * 2);
